@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: app-test-frontend
+  description: Frontend for app-test (React + TypeScript)
+  annotations:
+    github.com/project-slug: huttyman-ais/app-test-frontend
+    backstage.io/techdocs-ref: dir:.
+  tags: [react, typescript, frontend]
+spec:
+  type: website
+  lifecycle: dev
+  owner: user:default/alice
+  system: app-test
+  consumesApis:
+    - app-test-backend-api
