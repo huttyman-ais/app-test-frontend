@@ -5,19 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Naming convention (must match terraform-modules outputs used by the -infra repo):
-#   resource group   : rg-app-test-dev
-#   ACR              : acrapp-testdev (alphanumeric only)
-#   container app env: cae-app-test-dev
-#   this container app: app-test-frontend
-env:
-  APP_NAME: app-test
-  ENVIRONMENT: dev
-  RESOURCE_GROUP: rg-app-test-dev
-  ACR_NAME: acrapp-testdev
-  CONTAINER_APP_NAME: app-test-frontend
-  IMAGE_NAME: app-test-frontend
-
 permissions:
   id-token: write # required for OIDC login to Azure
   contents: read
@@ -28,30 +15,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # This file is copied verbatim by the Scaffolder (copyWithoutRender in template.yaml) since
+      # GitHub Actions expressions use the same ${{ }} delimiter as Backstage's Nunjucks templating.
+      # Per-app values are derived at runtime from the repo name instead.
+      - name: Derive app and resource names
+        run: |
+          APP_NAME="${GITHUB_REPOSITORY##*/}"
+          APP_NAME="${APP_NAME%-frontend}"
+          ENVIRONMENT="dev"
+          echo "APP_NAME=$APP_NAME" >> "$GITHUB_ENV"
+          echo "RESOURCE_GROUP=rg-$APP_NAME-$ENVIRONMENT" >> "$GITHUB_ENV"
+          echo "ACR_NAME=acr${APP_NAME//-/}$ENVIRONMENT" >> "$GITHUB_ENV"
+          echo "CONTAINER_APP_NAME=$APP_NAME-frontend" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=$APP_NAME-frontend" >> "$GITHUB_ENV"
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: 
-          tenant-id: 
-          subscription-id: 
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: ACR login
-        run: az acr login --name 
+        run: az acr login --name ${{ env.ACR_NAME }}
 
       - name: Resolve backend API URL
         id: api
         run: |
           FQDN=$(az containerapp show \
-            --name "-backend" \
-            --resource-group "" \
+            --name "${{ env.APP_NAME }}-backend" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
           echo "url=https://$FQDN" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         run: |
-          IMAGE=".azurecr.io/:"
+          IMAGE="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           docker build \
-            --build-arg VITE_API_URL="" \
+            --build-arg VITE_API_URL="${{ steps.api.outputs.url }}" \
             -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
@@ -59,14 +60,14 @@ jobs:
       - name: Deploy to Container Apps
         run: |
           az containerapp update \
-            --name  \
-            --resource-group  \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
             --image "$IMAGE"
 
       - name: Summary
         run: |
-          FQDN=$(az containerapp show --name  \
-            --resource-group  \
+          FQDN=$(az containerapp show --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
             --query "properties.configuration.ingress.fqdn" -o tsv)
           echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
           echo "- Frontend URL: https://$FQDN" >> "$GITHUB_STEP_SUMMARY"
